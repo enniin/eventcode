@@ -1,5 +1,7 @@
 # Event segmentation analysis pipeline
 
+_These analyses are related to the Master's Thesis work "The hippocampal audio editor: neural correlates of event segmentation in an auditory narrative" (Saaristo 2023, University of Helsinki): http://urn.fi/URN:NBN:fi:hulib-202302281401_
+
 ROI analyses on the ALEX fMRI data. Main analyses are the comparison of responses to intact boundary set vs. its permutations (_bounds vs. perms_), FIR models for plotting (_FIR plotting_), testing salience modulation with a beta series approach (_salience modulation_), and exploring responses to adjusted boundary timings (_boundary timings_). These scripts deal with the extraction of ROIs and fitting of the various glms – the actual statistical tests and plotting are done in a separate R markdown file (see folder 5_analyses_plots).
 
 The folders are organised according to phase, not analysis:
