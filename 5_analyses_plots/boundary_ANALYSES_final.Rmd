@@ -1,0 +1,477 @@
+---
+title: "Analyses for event segmentation thesis"
+author: "Jenni Saaristo"
+date: "18.8.2021"
+output:
+  pdf_document:
+    fig_crop: false
+---
+
+These are the final analyses reported in the thesis.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment="")
+outdir = '/Users/jenska/code/python/eventcode/5_analyses_plots/out/'
+figdir <- '/Users/jenska/code/python/eventcode/5_analyses_plots/figs/' 
+indir <- '/Users/jenska/code/python/eventcode/4_get_averages/out/'
+suppressMessages(library(tidyverse))
+```
+
+# Main analyses
+
+The analyses for the main research questions: responses for bounds versus perms, modulation by salience, and plotting these with the FIR models.
+
+## Calculate significance of bounds vs perms and plot results
+
+Define which data to use for all results:
+```{r define_strategy}
+re_time <- '3s'
+if (re_time == '3s') {is_3s <- TRUE} else {is_3s <- FALSE}
+```
+
+### Statistical analyses
+```{r boundsperms_stats}
+datapath <- paste(indir,'AVG_boundperms_',re_time,'_all.csv', sep="")
+data <- read_csv(datapath, col_types = cols())
+areas <- unique(data$area)
+
+results <- data.frame(area=areas, beta=0, p=1, perm_mean=0, perm_sd=0)
+for (a in areas) {
+  perm_betas <- data$beta[data$perm != 0 & data$area == a]
+  bound_beta <- data$beta[data$perm == 0 & data$area == a]
+  p <- length(perm_betas[perm_betas > bound_beta])/length(perm_betas) # in fact we just want 1-tailed
+  results$beta[results$area == a] <- bound_beta
+  results$p[results$area == a] <- p
+  results$perm_mean[results$area == a] <- mean(perm_betas)
+  results$perm_sd[results$area == a] <- sd(perm_betas)
+}
+results$p_adj <- p.adjust(results$p, method='holm')
+results[results$area == areas[49],]
+
+topareas <- results[results$p_adj < 0.05,]
+topareas <- topareas[order(topareas$beta, decreasing = TRUE),]
+topareas
+
+for (i in 1:nrow(topareas)) {
+  writeLines(paste(topareas$area[i], round(topareas$beta[i],3), round(topareas$p_adj[i],6), sep = '\t'))
+}
+
+write_csv(results, paste(outdir,'boundperm_results_',re_time,'.csv', sep=""))
+sigs <- as.numeric(rownames(topareas))
+sigs <- append(sigs, 49)
+```
+
+### Plot bounds vs perms
+We'll only plot this for HC, the rest will make do with FIRs and stats
+```{r boundsperms_plots}
+# Hippocampus
+a = c(49)
+asel <- areas[a]
+bounds <- subset(data, perm == 0 & area %in% asel)
+perms <- subset(data, perm != 0 & area %in% asel)
+
+png(paste(figdir,'bounds_vs_perms_',re_time,'_HC.png',sep=""), width=550, height=400)
+ggplot(data=perms, aes(group=area)) +
+  geom_histogram(aes(x=beta), binwidth = 2) +
+  geom_vline(mapping=aes(xintercept=beta), data=bounds, color='red', size=2) +
+  facet_wrap( ~ area,ncol=2) +
+  labs(x='beta values', y='count (total 1000)', title=paste('Latency -', re_time, sep="")) +
+  scale_x_continuous(limits=c(-17,17), breaks=seq(-15,15,5)) +
+  theme_grey(base_size = 25)
+dev.off()
+```
+
+### Plot FIRs
+We'll only use the ones from 3s, with an added line for the 1s bound. In addition to HC we'll plot all areas that are significant in either condition, because the reader should have all that info available -- it sucks when you don't have it. For this first part we plot the grand average over all saliences as that's more clearly interpretable in conjunction with the cortical plots.
+
+```{r fir_plots, eval=is_3s, include=is_3s}
+datapath <- paste(indir,'AVG_fir_',re_time,'_all.csv', sep="")
+data <- read_csv(datapath, col_types = cols())
+data$cond <- as.factor(data$cond)
+data$cond <- ordered(data$cond, levels=c('high','mid','low','all'))
+
+data <- filter(data, grepl('delay', regressor))
+data$delay <- as.numeric(gsub(data$regressor, pattern="[^0-9]", replacement=""))
+data$delay <- data$delay - 8  # adjust latencies so that behav boundary is 0
+areas <- unique(data$area)
+
+# Plot HC large
+conds <- c('high','mid','low')
+asel <- areas[49]
+plotdata <- subset(data, area %in% asel & cond %in% conds)
+png(paste(figdir,'bounds_FIRs_',re_time,'_HC.png', sep=""), width=1100, height=700)
+pd <- position_dodge(0.2)
+ggplot(plotdata, aes(x=delay, y=beta, color=cond)) +
+  geom_hline(yintercept = 0, color='grey50', size=1) +
+  geom_vline(xintercept = -3, color='blue3', size=2) +   # latency = -3
+  geom_vline(xintercept = -1, color='green3', size=2) +  # latency = -1
+  geom_point(position=pd, size=8) +
+  geom_line(position=pd, size=3) +
+  geom_errorbar(aes(ymin=beta-se, ymax=beta+se), width=0.5, size=1, position=pd) +
+  scale_color_grey(name='salience') +
+  scale_x_continuous(breaks=seq(-8,7)) +
+  labs(title=paste('Modulation by salience')) +
+  xlab('delay (sec)') +
+  facet_wrap(~ area, ncol=1) +
+  theme_bw(base_size = 24) +
+  theme(panel.grid=element_blank())
+dev.off()
+
+# Plot others small, grand average
+conds <- c('all')
+asel <- areas[sigs]
+plotdata <- subset(data, area %in% asel & cond %in% conds)
+pd <- position_dodge(0.2)
+png(paste(figdir,'bounds_FIRs_',re_time, '_avg_cortical.png', sep=""), width=1400, height=700)
+ggplot(plotdata, aes(x=delay, y=beta)) +
+  geom_hline(yintercept = 0, color='grey50', size=1) +
+  geom_vline(xintercept = -3, color='blue3', size=2) +   # latency = -3
+  geom_vline(xintercept = -1, color='green3', size=2) +  # latency = -1
+  geom_point(position=pd, size=3) +
+  geom_line(position=pd, size=1) +
+  geom_errorbar(aes(ymin=beta-se, ymax=beta+se), width=0.3, size=0.7, position=pd) +
+  #scale_color_grey(name='salience') +
+  scale_x_continuous(breaks=seq(-8,7)) +
+  scale_y_continuous(limits=c(-7,12), breaks=seq(-5,10,5)) +
+  labs(title=paste('FIR responses')) +
+  xlab('delay (sec)') +
+  facet_wrap(~ area, ncol=4, scales='free') +
+  theme_bw(base_size = 20) +
+  theme(panel.grid=element_blank())
+dev.off()
+
+```
+
+```{r include=FALSE}
+rm(data,datapath,bounds,perms,bound_beta,perm_betas,results,topareas,conds,plotdata,areas,asel,a,pd,p,plotlist,i,sigs)
+```
+
+
+## Modulation by salience
+```{r modulation_stats}
+suppressMessages(library(lme4))
+suppressMessages(library(lmerTest))
+
+datapath <- paste(indir,'betas_series_long_',re_time,'.csv', sep="")
+data <- read_csv(datapath, col_types = cols())
+boundpath <- paste('/Users/jenska/code/python/eventcode/1_create_boundaries/out/boundaries_f',re_time,'_vol.csv', sep="")
+bounds <- read_csv(boundpath, col_types = cols())
+areas <- unique(data$area)
+
+# Salience for bounds (bins: 5-6, 7-9, 10-17)
+bounds$salience <- 0
+bounds$salience[bounds$nobs >= 7] <- 1
+bounds$salience[bounds$nobs >= 10] <- 2
+
+# Clean some unnecessary columns
+bounds <- subset(bounds, select=c(id,nobs,salience,meanvol,voldiff))
+data <- subset(data, select=-c(X1))
+data <- dplyr::rename(data, id=bound)
+
+# Also remove the post-hoc bounds from data
+data <- data[data$id != 999,]
+
+# Join the data frames
+data <- inner_join(data,bounds, by="id")
+
+# Check correlations
+cor.test(bounds$salience, bounds$meanvol)
+cor.test(bounds$salience, bounds$voldiff)
+cor.test(bounds$nobs, bounds$meanvol)
+cor.test(bounds$nobs, bounds$voldiff)
+
+# Run glm on HC, salience
+datasel <- data[data$area == areas[49],]
+m1 <- lmer(beta ~ salience + meanvol + voldiff + (1 | subj) + (1 | id), datasel)
+anova(m1)
+m11 <- lmer(beta ~ salience + (1 | subj) + (1 | id), datasel)
+anova(m11)
+
+# Run glm on HC, nObs
+datasel <- data[data$area == areas[49],]
+m2 <- lmer(beta ~ nobs + meanvol + voldiff + (1 | subj) + (1 | id), datasel)
+anova(m2)
+m21 <- lmer(beta ~ nobs + (1 | subj) + (1 | id), datasel)
+anova(m21)
+
+# Run for all ROIs
+results <- data.frame(area=areas, f_sal=0, p_sal=1, f_obs=0, p_obs=1)
+
+for (i in c(1:49)) {
+  datasel <- data[data$area == areas[i],]
+  anv1 <- anova(lmer(beta ~ salience +  meanvol + voldiff + (1 | subj) + (1 | id), datasel))
+  anv2 <- anova(lmer(beta ~ nobs +  meanvol + voldiff + (1 | subj) + (1 | id), datasel))
+  results$f_sal[i] <- anv1$`F value`[1]
+  results$p_sal[i] <- anv1$`Pr(>F)`[1]
+  results$f_obs[i] <- anv2$`F value`[1]
+  results$p_obs[i] <- anv2$`Pr(>F)`[1]
+}
+results$p_sal_adj <- p.adjust(results$p_sal, method='holm')
+results$p_obs_adj <- p.adjust(results$p_obs, method='holm')
+
+# Select results
+topareas <- results[results$p_sal_adj < 0.05 | results$p_obs_adj < 0.05,]
+topareas <- topareas[order(topareas$f_obs, decreasing = T),]
+topareas
+
+results[results$area == areas[49],]
+
+for (i in 1:nrow(topareas)) {
+  writeLines(paste(topareas$area[i], round(topareas$f_sal[i],3), round(topareas$p_sal[i],3), round(topareas$p_sal_adj[i],3), round(topareas$f_obs[i],3), round(topareas$p_obs[i],3), round(topareas$p_obs_adj[i],3), sep = '\t'))
+}
+sigs <- as.numeric(rownames(topareas))
+sigs <- append(sigs, 49)
+```
+
+Without confounds
+```{r modulation_stats_nocon}
+
+# Run for all ROIs
+results_nocon <- data.frame(area=areas, f_sal=0, p_sal=1, f_obs=0, p_obs=1)
+
+for (i in c(1:49)) {
+  datasel <- data[data$area == areas[i],]
+  anv1 <- anova(lmer(beta ~ salience + (1 | subj) + (1 | id), datasel))
+  anv2 <- anova(lmer(beta ~ nobs + (1 | subj) + (1 | id), datasel))
+  results_nocon$f_sal[i] <- anv1$`F value`[1]
+  results_nocon$p_sal[i] <- anv1$`Pr(>F)`[1]
+  results_nocon$f_obs[i] <- anv2$`F value`[1]
+  results_nocon$p_obs[i] <- anv2$`Pr(>F)`[1]
+}
+results_nocon$p_sal_adj <- p.adjust(results_nocon$p_sal, method='holm')
+results_nocon$p_obs_adj <- p.adjust(results_nocon$p_obs, method='holm')
+
+# Select results
+topareas_nocon <- results_nocon[results_nocon$p_sal_adj < 0.05 | results_nocon$p_obs_adj < 0.05,]
+topareas_nocon <- topareas_nocon[order(topareas_nocon$f_obs, decreasing = T),]
+topareas_nocon
+
+results_nocon[results_nocon$area == areas[49],]
+
+for (i in 1:nrow(topareas_nocon)) {
+  writeLines(paste(topareas_nocon$area[i], round(topareas_nocon$f_sal[i],3), round(topareas_nocon$p_sal[i],3), round(topareas_nocon$p_sal_adj[i],3), round(topareas_nocon$f_obs[i],3), round(topareas_nocon$p_obs[i],3), round(topareas_nocon$p_obs_adj[i],3), sep = '\t'))
+}
+sigs_nocon <- as.numeric(rownames(topareas_nocon))
+sigs_nocon <- append(sigs, 49)
+
+```
+
+
+
+### Plot FIRs
+With salience
+```{r, eval=is_3s, include=is_3s}
+datapath <- paste(indir,'AVG_fir_',re_time,'_all.csv', sep="")
+data <- read_csv(datapath, col_types = cols())
+data$cond <- as.factor(data$cond)
+data$cond <- ordered(data$cond, levels=c('high','mid','low','all'))
+
+data <- filter(data, grepl('delay', regressor))
+data$delay <- as.numeric(gsub(data$regressor, pattern="[^0-9]", replacement=""))
+data$delay <- data$delay - 8  # adjust latencies so that behav boundary is 0
+areas <- unique(data$area)
+conds <- c('high','mid','low')
+
+# Plot all with salience
+asel <- areas[sigs]
+plotdata <- subset(data, area %in% asel & cond %in% conds)
+pd <- position_dodge(0.2)
+png(paste(figdir,'bounds_FIRs_',re_time, '_sal_cortical.png', sep=""), width=1400, height=500)
+ggplot(plotdata, aes(x=delay, y=beta, color=cond)) +
+  geom_hline(yintercept = 0, color='grey50', size=1) +
+  geom_vline(xintercept = -3, color='blue3', size=2) +   # latency = -3
+  #geom_vline(xintercept = -1, color='green3', size=2) +  # latency = -1
+  geom_point(position=pd, size=3) +
+  geom_line(position=pd, size=1) +
+  geom_errorbar(aes(ymin=beta-se, ymax=beta+se), width=0.3, size=0.7, position=pd) +
+  scale_color_grey(name='salience') +
+  scale_x_continuous(breaks=seq(-8,7)) +
+  scale_y_continuous(limits=c(-7,18), breaks=seq(-5,15,5)) +
+  labs(title=paste('FIR responses')) +
+  xlab('delay (sec)') +
+  facet_wrap(~ area, ncol=4, scales='free') +
+  theme_bw(base_size = 20) +
+  theme(panel.grid=element_blank())
+dev.off()
+```
+
+```{r include=FALSE}
+rm(bounds,data,datasel,areas,results,m1,m11,m2,m21,anv1,anv2,topareas,i,boundpath,datapath,plotdata,pd,conds,sigs,asel)
+```
+
+
+# Secondary analyses: familiarity effects
+Nothing is even close to significant at 3s, even less at 1s -- does it make sense to even plot any of these? Well maybe HC has theoretical interest, so we should mention it.
+```{r familiarity}
+library(effsize)
+datapath <- paste(indir,'betas_boundperms_long_',re_time,'.csv', sep="")
+data <- read_csv(datapath, col_types = cols())
+areas <- unique(data$area)
+
+# Get subj info and merge
+subjdata <- read_csv('code/python/eventcode/subj_info.csv', col_types = cols())
+data <- merge(data, subjdata)
+
+results <- data.frame(area = areas, mean_lis1=0, mean_lis2=0, t=0, p=1, d=0)
+
+for (a in areas) {
+  lis1_betas <- data$beta[data$listening == 'first' & data$area == a]
+  lis2_betas <- data$beta[data$listening == 'second' & data$area == a]
+  stat <- t.test(lis1_betas,lis2_betas)
+  eff <- cohen.d(lis1_betas, lis2_betas)
+  results$mean_lis1[results$area == a] <- stat$estimate[1]
+  results$mean_lis2[results$area == a] <- stat$estimate[2]
+  results$t[results$area == a] <- stat$statistic
+  results$p[results$area == a] <- stat$p.value
+  results$d[results$area == a] <- eff$estimate
+}
+results$p_adj <- p.adjust(results$p, method='holm')
+
+rm(lis1_betas,lis2_betas,stat,eff)
+
+results[results$area == areas[49],]
+
+topareas <- results[results$d > 0.3,]
+topareas <- topareas[order(topareas$p, decreasing = FALSE),]
+topareas
+
+for (i in 1:nrow(topareas)) {
+  writeLines(paste(topareas$area[i], round(topareas$mean_lis1[i],3), round(topareas$mean_lis2[i],3),  round(topareas$d[i],3), round(topareas$p[i],3), round(topareas$p_adj[i],3), sep = '\t'))
+}
+```
+
+## Plot swarms
+I.e. the values that went into the t-test
+```{r, eval=is_3s, include=is_3s}
+library(ggbeeswarm)
+
+asel <- areas[49]
+plotdata <- subset(data, area %in% asel)
+png(paste(figdir,'fam_swarm_',re_time, '_HC.png', sep=""), width=600, height=500)
+ggplot(plotdata, aes(x=listening, y=beta)) +
+  geom_violin(color='grey40', fill='bisque2', size=1, draw_quantiles=0.5) +
+  geom_quasirandom(dodge.width=1, size=4) +
+  labs(title=paste('Effect of familiarity on HC response')) +
+  xlab('Listening') +
+  theme_bw(base_size = 24) +
+  theme(panel.grid=element_blank())
+dev.off()
+```
+
+```{r include=FALSE}
+rm(data,results,subjdata,topareas,a,areas,i)
+```
+
+## Plot FIRs by grp
+For HC
+```{r firs_fam, eval=is_3s, include=is_3s}
+datapath1 <- paste(indir,'AVG_fir_',re_time,'_1st.csv', sep="")
+data1 <- read_csv(datapath1, col_types = cols())
+datapath2 <- paste(indir,'AVG_fir_',re_time,'_2nd.csv', sep="")
+data2 <- read_csv(datapath2, col_types = cols())
+
+data1 <- subset(data1, cond=='all')
+data2 <- subset(data2, cond=='all')
+data1$lis <- '1st'
+data2$lis <- '2nd'
+data <- rbind(data1, data2)
+rm(datapath1,datapath2,data1,data2)
+
+data <- filter(data, grepl('delay', regressor))
+data$delay <- as.numeric(gsub(data$regressor, pattern="[^0-9]", replacement=""))
+data$delay <- data$delay - 5
+
+areas <- unique(data$area)
+
+# Plot HC
+asel <- areas[49]
+plotdata <- subset(data, area %in% asel)
+png(paste(figdir,'fam_FIRs_',re_time,'_HC.png', sep=""), width=1000, height=600)
+pd <- position_dodge(0.2)
+ggplot(plotdata, aes(x=delay, y=beta, color=lis)) +
+  geom_hline(yintercept = 0, color='grey50', size=1) +
+  geom_vline(xintercept = 0, color='blue3', size=2) +  # delay = 0
+  geom_point(position=pd, size=8) +
+  geom_line(position=pd, size=3) +
+  geom_errorbar(aes(ymin=beta-se, ymax=beta+se), width=0.5, size=1, position=pd) +
+  scale_color_grey(name='Listening') +
+  scale_x_continuous(breaks=seq(-5,10)) +
+  labs(title=paste('Modulation by familiarity')) +
+  xlab('delay (sec)') +
+  #facet_wrap(~ area, ncol=1) +
+  theme_bw(base_size = 24) +
+  theme(panel.grid=element_blank())
+dev.off()
+```
+
+```{r include=FALSE}
+rm(data,plotdata,pd,asel,areas)
+```
+
+
+# Test bounds against non-bounds (audio gaps)
+```{r test_audiobounds, eval=is_3s, include=is_3s}
+datapath <- paste(indir,'AVG_audioperms_',re_time,'_all.csv', sep="")
+data <- read_csv(datapath, col_types = cols())
+areas <- unique(data$area)
+
+results <- data.frame(area=areas, beta=0, p=1, perm_mean=0, perm_sd=0)
+for (a in areas) {
+  perm_betas <- data$beta[data$perm != 0 & data$area == a]
+  bound_beta <- data$beta[data$perm == 0 & data$area == a]
+  p <- length(perm_betas[perm_betas > bound_beta])/length(perm_betas) # in fact we just want 1-tailed
+  results$beta[results$area == a] <- bound_beta
+  results$p[results$area == a] <- p
+  results$perm_mean[results$area == a] <- mean(perm_betas)
+  results$perm_sd[results$area == a] <- sd(perm_betas)
+}
+results$p_adj <- p.adjust(results$p, method='holm')
+results[results$area == areas[49],]
+
+topareas <- results[results$p_adj < 0.05,]
+topareas <- topareas[order(topareas$beta, decreasing = TRUE),]
+topareas
+
+for (i in 1:nrow(topareas)) {
+  writeLines(paste(topareas$area[i], round(topareas$beta[i],3), round(topareas$p_adj[i],6), sep = '\t'))
+}
+
+write_csv(results, paste(outdir,'audioperm_results_',re_time,'.csv', sep=""))
+sigs <- as.numeric(rownames(topareas))
+```
+
+### Plot
+Not sure if it makes sense to plot these... well maybe yes, there's room in the fig
+```{r audioperms_plots, eval=is_3s, include=is_3s}
+# Plot HC
+a = c(49)
+asel <- areas[a]
+bounds <- subset(data, perm == 0 & area %in% asel)
+perms <- subset(data, perm != 0 & area %in% asel)
+png(paste(figdir,'bounds_vs_audio_',re_time,'_HC.png',sep=""), width=500, height=400)
+ggplot(data=perms, aes(group=area)) +
+  geom_histogram(aes(x=beta), binwidth = 2) +
+  geom_vline(mapping=aes(xintercept=beta), data=bounds, color='red', size=2) +
+  facet_wrap( ~ area,ncol=2) +
+  labs(x='beta values', y='count (total 1000)', title='Boundaries vs. audiogaps') +
+  theme_grey(base_size = 25)
+dev.off()
+
+# Plot others
+asel <- areas[sigs]
+bounds <- subset(data, perm == 0 & area %in% asel)
+perms <- subset(data, perm != 0 & area %in% asel)
+png(paste(figdir,'bounds_vs_audio_',re_time, '_cortical.png', sep=""), width=1300, height=400)
+ggplot(data=perms, aes(group=area)) +
+  geom_histogram(aes(x=beta), binwidth = 2) +
+  geom_vline(mapping=aes(xintercept=beta), data=bounds, color='red', size=1.5) +
+  facet_wrap( ~ area,nrow=2) +
+  labs(x='beta values', y='count (total 1000)') +
+  theme_grey(base_size = 19)
+dev.off()
+
+```
+
+```{r include=FALSE, eval=is_3s, include=is_3s}
+rm(data,bounds,perms,results,topareas,areas,a,asel,bound_beta,perm_betas,i,datapath,plotlist,p,sigs)
+```
